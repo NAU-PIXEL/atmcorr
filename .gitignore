@@ -1,0 +1,12 @@
+__pycache__/
+*.egg-info/
+*.pyc
+build/
+dist/
+.pytest_cache/
+.DS_Store
+# Master OPT spectra: distributed as a GitHub Release asset, fetched on demand.
+atmcorr/data/master/
+
+# JetBrains IDE
+.idea/

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atmcorr"
+version = "0.1.0"
+description = "Portable atmospheric-correction LUTs for thermal imaging (RFM-derived, RFM-free at runtime)."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Jean-François Smekens", email = "js4247@nau.edu" }]
+keywords = ["thermal imaging", "atmospheric correction", "infrared", "radiative transfer", "FLIR"]
+license = { text = "MIT" }
+classifiers = ["License :: OSI Approved :: MIT License"]
+dependencies = [
+    "numpy",
+    "scipy",
+]
+
+[project.urls]
+Repository = "https://github.com/NAU-PIXEL/atmcorr"
+
+[project.scripts]
+atmcorr = "atmcorr.__main__:main"
+
+[project.optional-dependencies]
+# Generation (Stage 2, build_instrument) additionally needs pandas to read SRF
+# CSVs. The reader (AtmosLUT) — the imaging-side runtime — needs only numpy/scipy.
+build = ["pandas"]
+# Plotting helpers (atmcorr.plotting: plotLUT / plotMaster).
+plot = ["matplotlib"]
+all = ["pandas", "matplotlib"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["atmcorr*"]
+
+[tool.setuptools.package-data]
+# Ship the SRF library and precomputed LUTs; the master is a Release asset,
+# fetched to data/master/ on demand (see atmcorr.fetch_master), never committed.
+atmcorr = ["data/srf/**/*.csv", "data/luts/*.npz"]
