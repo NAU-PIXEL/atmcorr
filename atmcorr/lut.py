@@ -85,7 +85,11 @@ from scipy.optimize import nnls
 
 from .registry import resolve_lut
 
-FORMAT_VERSION = '1'
+# 2 — bands may be weighted by ``filter × detector`` rather than by the supplied
+#     SRF alone, and ``meta`` records which, via 'weighting' and 'detector'. A
+#     version-1 LUT carries no such record, so its weighting cannot be
+#     established from the file at all: rebuild rather than assume.
+FORMAT_VERSION = '2'
 
 # Distance-map queries larger than this switch from direct evaluation to
 # build-curve-then-interpolate; it also sets the curve's sample count.
@@ -216,9 +220,17 @@ class AtmosLUT:
         with np.load(self.path, allow_pickle=False) as npz:
             version = str(npz['format_version'])
             if version != FORMAT_VERSION:
+                extra = ''
+                if version == '1':
+                    extra = (" A version-1 LUT does not record how its bands "
+                             "were weighted; if the instrument has filters in "
+                             "front of a detector, this LUT is filter-only and "
+                             "disagrees with a composite radiance. Rebuild with "
+                             "build_instrument(..., detector=...).")
                 warnings.warn(
                     f"LUT format version {version!r} != reader version "
-                    f"{FORMAT_VERSION!r}; proceeding but fields may differ.",
+                    f"{FORMAT_VERSION!r}; proceeding but fields may differ."
+                    + extra,
                     RuntimeWarning,
                 )
             self.instrument = str(npz['instrument'])

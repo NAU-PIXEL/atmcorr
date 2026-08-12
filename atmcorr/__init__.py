@@ -13,6 +13,11 @@ Author a LUT (needs a master data file, one-off)::
     from atmcorr import build_instrument
     build_instrument('MyCam', srf='path/to/MyCam.csv')   # master auto-resolved
 
+When the SRFs are filter transmissions rather than whole-band responses, give the
+detector they sit behind so the weights become ``filter x detector``::
+
+    build_instrument('MMT-gasCam', detector='FLIR-microbolometer')
+
 Apply a LUT (imaging side, no master needed)::
 
     from atmcorr import AtmosLUT
@@ -34,7 +39,7 @@ __all__ = [
     'resolve_srf', 'select_master_for_srf', 'plotLUT', 'plotMaster',
     'FORMAT_VERSION',
 ]
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 # Plotting is optional (needs matplotlib): resolve atmcorr.plotLUT / plotMaster
 # lazily so importing atmcorr never requires matplotlib.

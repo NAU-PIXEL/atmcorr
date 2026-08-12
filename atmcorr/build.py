@@ -77,13 +77,33 @@ def _load_srf(csv_path: Union[str, Path]) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _srf_weights(srf_wn: np.ndarray, srf_T: np.ndarray,
-                 master_wn: np.ndarray, name: str) -> np.ndarray:
+                 master_wn: np.ndarray, name: str,
+                 detector: Union[tuple, None] = None) -> np.ndarray:
     """
     Resample an SRF onto the master grid and normalise to unit sum.
 
     Response is linearly interpolated onto ``master_wn`` and zeroed outside the
     SRF's own support. A warning is raised if the SRF carries >1 % response beyond
     the master's wavenumber range (that part is clipped).
+
+    Parameters
+    ----------
+    srf_wn, srf_T : numpy.ndarray
+        The band's own response, ascending in wavenumber.
+    master_wn : numpy.ndarray
+        Master wavenumber grid.
+    name : str
+        Band name, for diagnostics.
+    detector : tuple of numpy.ndarray, optional
+        ``(wn, response)`` for the detector the band sits behind. When given the
+        weights become the **product** of the two: light passes through the
+        filter *and* the detector, so a band's response is neither alone. The
+        filter's own support still bounds the result, since the product is zero
+        outside it.
+
+        Mirrors ``IRViewer``'s ``resolve_srf`` product form
+        (``'<set>/<filter>*<detector>'``); the two packages must weight bands
+        identically or a retrieval disagrees with the radiance it was given.
     """
     lo, hi = master_wn.min(), master_wn.max()
     sig = srf_T > 0.01 * srf_T.max()
@@ -95,11 +115,18 @@ def _srf_weights(srf_wn: np.ndarray, srf_T: np.ndarray,
         )
     w = np.interp(master_wn, srf_wn, srf_T, left=0.0, right=0.0)
     w = np.clip(w, 0.0, None)
+    if detector is not None:
+        det_wn, det_T = detector
+        d = np.clip(np.interp(master_wn, det_wn, det_T, left=0.0, right=0.0),
+                    0.0, None)
+        w = w * d
     total = w.sum()
     if total <= 0:
         raise ValueError(
             f"SRF {name!r} has no overlap with the master range "
-            f"[{lo:.0f}, {hi:.0f}] cm⁻¹."
+            f"[{lo:.0f}, {hi:.0f}] cm⁻¹"
+            + (" once multiplied by the detector response" if detector else "")
+            + "."
         )
     return w / total
 
@@ -213,6 +240,7 @@ def build_instrument(
     out_path: Union[str, Path, None] = None,
     n_g: int = 32,
     default_pres: float = 1013.0,
+    detector: Union[str, Path, None] = None,
 ) -> Path:
     """
     Build a per-instrument atmospheric-correction LUT from a master + SRF(s).
@@ -240,6 +268,15 @@ def build_instrument(
         k-distribution quadrature points. Default 32.
     default_pres : float, optional
         Pressure the reader assumes when a query omits it [mbar]. Default 1013.
+    detector : str or pathlib.Path, optional
+        Detector response the bands sit behind, as an instrument name or a CSV
+        path. When given, every band's weights become ``filter × detector``,
+        which is the response the light actually sees — a filter transmission
+        alone is not a band's response.
+
+        Recorded in the LUT metadata, and ``format_version`` becomes 2. A
+        version-1 LUT is filter-only; the two are otherwise indistinguishable,
+        which is why the field exists.
 
     Returns
     -------
@@ -267,8 +304,25 @@ def build_instrument(
     # k(ν) = OPT / L0, kept float32 to bound memory (L0 = 1 km ⇒ k == OPT).
     k = opt.astype(np.float32) / np.float32(l0)
 
+    # The detector the bands sit behind, if any. Resolved the same way as an
+    # SRF, so it may be a bundled instrument name or an explicit CSV.
+    det_curve = None
+    det_file = None
+    if detector is not None:
+        det_path = resolve_srf(detector)
+        if det_path.is_dir():
+            csvs = sorted(det_path.glob('*.csv'))
+            if len(csvs) != 1:
+                raise ValueError(
+                    f"detector {detector!r} resolves to {det_path}, which holds "
+                    f"{len(csvs)} CSVs; a detector is one curve, so name the "
+                    f"file explicitly.")
+            det_path = csvs[0]
+        det_curve = _load_srf(det_path)
+        det_file = str(det_path)
+
     weights = {
-        name: _srf_weights(swn, sT, wn, name)
+        name: _srf_weights(swn, sT, wn, name, detector=det_curve)
         for name, (swn, sT) in loaded.items()
     }
     kdist = _build_kdists(k, weights, n_g)
@@ -279,6 +333,16 @@ def build_instrument(
         'n_g': n_g,
         'window': stamp.get('window'),
         'srf_files': {name: str(csv) for name, csv in srf_map.items()},
+        # How the bands were weighted. Without this a composite LUT and a
+        # filter-only one are indistinguishable — same keys, same shapes,
+        # different meaning — which is worse than a name collision because
+        # nothing surfaces it.
+        # 'as-supplied' rather than 'filter-only': for a single-curve instrument
+        # such as FLIR-microbolometer the CSV already *is* the whole response,
+        # so there is nothing to compose and nothing missing.
+        'weighting': 'composite' if det_curve is not None else 'as-supplied',
+        'detector': str(detector) if detector is not None else None,
+        'detector_file': det_file,
         'master_stamp': stamp,
     }
     if out_path is None:

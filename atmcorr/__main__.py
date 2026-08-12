@@ -34,6 +34,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help='Force a spectral window (LWIR/MWIR) instead of auto-selecting by SRF.')
     b.add_argument('--out', default=None,
                    help='Output .npz path, or a directory (default: <instrument>_atmos_lut.npz in the CWD).')
+    b.add_argument('--detector', default=None,
+                   help="Detector the bands sit behind (instrument name or CSV). Give this when "
+                        "--srf holds filter transmissions: a band's response is filter x detector, "
+                        "not the filter alone.")
     b.add_argument('--n-g', type=int, default=32, help='k-distribution quadrature points (default 32).')
     b.add_argument('--default-pres', type=float, default=1013.0,
                    help='Pressure assumed when a query omits it [mbar] (default 1013).')
@@ -69,7 +73,7 @@ def _cmd_build(args: argparse.Namespace) -> None:
         out = str(Path(out) / f'{args.instrument}_atmos_lut.npz')
     written = build_instrument(args.instrument, srf=args.srf, master_path=args.master,
                                window=args.window, out_path=out, n_g=args.n_g,
-                               default_pres=args.default_pres)
+                               default_pres=args.default_pres, detector=args.detector)
     print(f'Wrote {written}')
     print('To resolve it by name, place it in $ATMCORR_LUT_DIR or ~/.local/share/atmcorr/luts/ ; '
           'otherwise load it by path with AtmosLUT("<path>").')

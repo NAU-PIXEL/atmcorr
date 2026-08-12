@@ -226,6 +226,38 @@ Each SRF CSV needs a `wn` [cm⁻¹] **or** `wl` [µm] column and a `T` response 
 becomes a multi-filter LUT named by filename stem. Drop the result in
 `$ATMCORR_LUT_DIR` (or the bundled `data/luts/`) and it resolves by name.
 
+#### Filters in front of a detector
+
+For a filter-wheel instrument the CSVs are usually **filter transmissions alone**,
+but light passes through the filter *and* the detector, so a band's response is
+the **product** of the two. Pass the detector and the weights are composed:
+
+```python
+build_instrument('MMT-gasCam', detector='FLIR-microbolometer')
+```
+
+`detector` takes an instrument name or a CSV path. Use it whenever your CSVs are
+filter curves; omit it when each CSV already *is* a band's whole response, as for
+a single-detector camera.
+
+How much it matters, measured on the gasCam's twelve filters against the bundled
+LWIR master: band transmittance shifts by **at most 0.0027 absolute** across the
+full grid (2520 atmospheres × three path lengths), worth ≲0.8 K at 500 K. Small,
+but a bias rather than noise, and it costs nothing to get right.
+
+The choice is recorded in the LUT, because a composed LUT and a filter-only one
+are otherwise indistinguishable — same keys, same shapes, different meaning:
+
+```python
+import json, numpy as np
+meta = json.loads(str(np.load('MMT-gasCam_atmos_lut.npz', allow_pickle=True)['meta']))
+meta['weighting']    # 'composite' or 'as-supplied'
+meta['detector']     # the curve used, or None
+```
+
+`'as-supplied'` rather than `'filter-only'`: for a single-curve instrument the CSV
+already is the whole response, so nothing is missing.
+
 ### Plugging into an imaging pipeline
 
 A pipeline with a custom-atmosphere hook (e.g. a FLIR-style `atm_model='custom'`,
@@ -361,7 +393,7 @@ Produced by `atmcorr.build_instrument`; the writer `AtmosLUT.write` lives in
 
 | Key | Type | Meaning |
 |---|---|---|
-| `format_version` | str | schema version |
+| `format_version` | str | schema version — see below |
 | `instrument` | str | instrument name |
 | `wn_range` | float (2,) | spectral range of the RFM runs [cm⁻¹] |
 | `temp`, `pres`, `rh` | float (n,) | grid axes [K], [mbar], [%] |
@@ -369,4 +401,19 @@ Produced by `atmcorr.build_instrument`; the writer `AtmosLUT.write` lives in
 | `filters` | str (n_filt,) | filter names |
 | `kdist__<name>` | float (n_temp, n_pres, n_rh, n_g) | sorted absorption coefficients [km⁻¹] |
 | `default_pres` | float | pressure assumed when a query omits it [mbar] |
-| `meta` | str (JSON) | provenance (RFM/HITRAN version, reference path, date, …) |
+| `meta` | str (JSON) | provenance (RFM/HITRAN version, reference path, date, …) plus `weighting`, `detector`, `detector_file` |
+
+### Schema versions
+
+| `format_version` | |
+|---|---|
+| `1` | original layout |
+| `2` | `meta` records how bands were weighted: `weighting` (`'composite'` / `'as-supplied'`), `detector`, `detector_file` |
+
+A version-1 LUT records **nothing** about its weighting, so it cannot be
+established from the file. If its instrument has filters in front of a detector,
+that LUT is filter-only and disagrees with a composite radiance — rebuild it with
+`detector=` rather than assume. The reader says so on load.
+
+Reading a LUT whose version differs from the reader's warns but proceeds; nothing
+in the array layout changed between 1 and 2.
