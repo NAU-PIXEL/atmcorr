@@ -27,19 +27,20 @@ Apply a LUT (imaging side, no master needed)::
 """
 
 from .lut import AtmosLUT, altitude_to_pressure, FORMAT_VERSION
-from .build import build_instrument, tophat_srf
+from .build import LINESHAPES, build_instrument, lineshape_srf, tophat_srf
 from .registry import (
     available_luts, available_masters, fetch_master, resolve_lut, resolve_srf,
     select_master_for_srf,
 )
 
 __all__ = [
-    'AtmosLUT', 'build_instrument', 'tophat_srf', 'altitude_to_pressure',
+    'AtmosLUT', 'LINESHAPES', 'build_instrument', 'lineshape_srf',
+    'tophat_srf', 'altitude_to_pressure',
     'available_luts', 'available_masters', 'fetch_master', 'resolve_lut',
     'resolve_srf', 'select_master_for_srf', 'plotLUT', 'plotMaster',
     'FORMAT_VERSION',
 ]
-__version__ = '0.2.0'
+__version__ = '0.3.0'
 
 # Plotting is optional (needs matplotlib): resolve atmcorr.plotLUT / plotMaster
 # lazily so importing atmcorr never requires matplotlib.

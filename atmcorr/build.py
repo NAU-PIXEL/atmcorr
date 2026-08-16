@@ -232,6 +232,138 @@ def tophat_srf(
     return wn, T
 
 
+#: Instrument lineshapes available to :func:`lineshape_srf`, as functions of the
+#: offset from band centre in half-width units (so ``|x| = 0.5`` is the FWHM
+#: edge for every one of them). Keeping them normalised this way is what makes
+#: the FWHM mean the same thing across shapes, and therefore what makes a
+#: shape comparison at fixed FWHM meaningful.
+LINESHAPES = {
+    'tophat':   lambda x: (np.abs(x) <= 0.5).astype(float),
+    # 1 - |x|, not 1 - 2|x|: the half-maximum must fall at |x| = 0.5 like every
+    # other shape here, so the triangle's *base* is two FWHM. The 2 makes it
+    # zero at |x| = 0.5, which halves the width and turns a shape comparison
+    # into a width comparison.
+    'triangle': lambda x: np.clip(1.0 - np.abs(x), 0.0, None),
+    'gaussian': lambda x: np.exp(-4.0 * np.log(2.0) * x ** 2),
+    'lorentz':  lambda x: 1.0 / (1.0 + 4.0 * x ** 2),
+}
+
+
+def lineshape_srf(
+    centre_um: float,
+    fwhm: float,
+    shape: str = 'tophat',
+    out_path: Union[str, Path, None] = None,
+    n_points: int = 201,
+    span_fwhm: float = 5.0,
+    domain: str = 'wl',
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Build one band's response from a declared instrument lineshape.
+
+    For an instrument whose bands come from a tunable element rather than a set
+    of physical filters — a Fabry-Perot, an AOTF, a grating — there is no filter
+    curve to measure and the band response must be *asserted*. This makes that
+    assertion explicit and parameterised instead of hard-coding a boxcar
+    somewhere.
+
+    **The assertion is not free.** For 0.22 µm bands across the LWIR, band
+    transmittance moves by up to **0.096** between these four shapes at fixed
+    centre and FWHM, and by a comparable amount across a 0.15–0.44 µm FWHM
+    range. That is one to two orders above the 0.0027 that composing a filter
+    with its detector is worth. Correcting with a guessed shape still beats not
+    correcting — by 2–7× in recovered surface temperature — but a LUT built this
+    way should be recorded as carrying an assumed response, not a measured one.
+
+    Parameters
+    ----------
+    centre_um : float
+        Band centre [µm].
+    fwhm : float
+        Full width at half maximum, in the units set by *domain* — [µm] for
+        ``'wl'``, [cm⁻¹] for ``'wn'``. For a critically sampled instrument the
+        band spacing is the natural first guess.
+    shape : {'tophat', 'triangle', 'gaussian', 'lorentz'}, optional
+        Lineshape. ``'tophat'`` is the default and the most agnostic choice;
+        ``'lorentz'`` has Airy-like wings and is the closest of these to a
+        Fabry-Perot's true form, though a real Airy function also repeats at the
+        free spectral range, which none of these model.
+    out_path : str or pathlib.Path, optional
+        If given, also write a ``wn,wl,T`` CSV there (the SRF file format).
+    n_points : int, optional
+        Samples across the response. Default 201.
+    span_fwhm : float, optional
+        Half-width of the sampled span, in FWHM. Default 5, which captures the
+        Lorentzian wings that a narrower span would truncate.
+    domain : {'wl', 'wn'}, optional
+        Axis the lineshape is symmetric about. ``'wl'`` (default) builds it on
+        wavelength; ``'wn'`` builds it on wavenumber, which is right for an
+        instrument whose resolution is constant in wavenumber — a Fabry-Perot,
+        a grating, an FTS. Choosing the wrong one skews a band, and the skew
+        grows with band width: for a 24 cm⁻¹ band at 13 µm the two differ
+        noticeably, at 7 µm barely at all.
+
+    Returns
+    -------
+    wn, T : numpy.ndarray
+        Wavenumbers [cm⁻¹] ascending and the response.
+
+    Raises
+    ------
+    ValueError
+        If *shape* or *domain* is unknown, or the parameters are non-physical.
+    """
+    if shape not in LINESHAPES:
+        raise ValueError(
+            f"unknown lineshape {shape!r}; available: {sorted(LINESHAPES)}")
+    if domain not in ('wl', 'wn'):
+        raise ValueError(f"domain must be 'wl' or 'wn', got {domain!r}")
+    if not fwhm > 0:
+        raise ValueError(f"fwhm must be positive, got {fwhm}")
+    if not centre_um > 0:
+        raise ValueError(f"centre_um must be positive, got {centre_um}")
+
+    if domain == 'wl':
+        half = span_fwhm * fwhm
+        lo = max(centre_um - half, 1e-3)
+        wl = np.linspace(lo, centre_um + half, int(n_points))
+        T = LINESHAPES[shape]((wl - centre_um) / fwhm)
+        wn = 1e4 / wl
+    else:
+        centre_wn = 1e4 / centre_um
+        half = span_fwhm * fwhm
+        lo = max(centre_wn - half, 1e-3)
+        wn = np.linspace(lo, centre_wn + half, int(n_points))
+        T = LINESHAPES[shape]((wn - centre_wn) / fwhm)
+        wl = 1e4 / wn
+
+    order = np.argsort(wn)
+    wn, wl, T = wn[order], wl[order], T[order]
+    if out_path is not None:
+        out_path = Path(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        rows = ['wn,wl,T'] + [f'{a:.6f},{b:.6f},{c:.6f}'
+                              for a, b, c in zip(wn, wl, T)]
+        out_path.write_text('\n'.join(rows) + '\n')
+    return wn, T
+
+
+def _centroid_um(wn: np.ndarray, T: np.ndarray) -> float:
+    """
+    Response-weighted centre wavelength [µm] of one band.
+
+    Computed on the wavelength axis, which is the axis the imaging side works on
+    (``IRViewer``'s canonical convention), so the value can be compared directly
+    against a cube's band centres.
+    """
+    wl = 1e4 / np.asarray(wn, dtype=float)
+    weight = np.clip(np.asarray(T, dtype=float), 0.0, None)
+    total = weight.sum()
+    if total <= 0:
+        return float('nan')
+    return float((wl * weight).sum() / total)
+
+
 def build_instrument(
     instrument: str,
     srf: Union[str, Path, dict, None] = None,
@@ -343,6 +475,15 @@ def build_instrument(
         'weighting': 'composite' if det_curve is not None else 'as-supplied',
         'detector': str(detector) if detector is not None else None,
         'detector_file': det_file,
+        # Response-weighted centre of each band [µm]. A multi-band LUT whose
+        # filter names carry no wavelength (band00 … band28) can only be paired
+        # with a cube's bands by *order*, and order alone is a coincidence to
+        # rely on. With these, a consumer can verify each pairing against the
+        # band centre it claims to describe and refuse a LUT that does not
+        # match the cube — see IRViewer's _matched_by_wavelength.
+        'filter_centroids_um': {
+            name: _centroid_um(swn, sT) for name, (swn, sT) in loaded.items()
+        },
         'master_stamp': stamp,
     }
     if out_path is None:
